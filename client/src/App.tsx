@@ -22,7 +22,7 @@ function App() {
             await invoke("stop_audio_session");
             setStatus("Stopped");
         } catch (e) {
-            setStatus("Error Stop: " + e);
+            setStatus("Error Stop: " + String(e));
         }
     }
 
