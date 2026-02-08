@@ -1,0 +1,21 @@
+[package]
+name = "meow_voice"
+version = "0.1.0"
+description = "A Meow Voice Client"
+authors = ["you"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = ["shell-open"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Audio
+# cpal = "0.15" (Désactivé pour cause d'erreur de build cross-compile)
+# ringbuf = "0.3"
+
+# Network
+tokio = { version = "1", features = ["full"] }
+anyhow = "1.0"

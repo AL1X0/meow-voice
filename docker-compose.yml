@@ -1,0 +1,59 @@
+services:
+  # 1. Le Serveur VoIP (Backend)
+  meow-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "4433:4433/udp"
+      - "4433:4433/tcp"
+    restart: unless-stopped
+    networks:
+      - meow-net
+
+  # 2. Le Builder Client (Factory)
+  # Ce conteneur est destiné à être lancé ponctuellement pour compiler le client.
+  meow-client-builder:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.builder
+    volumes:
+      # Montage du code source client pour lecture
+      - ./client:/app
+      # Volume partagé pour déposer l'exécutable compilé
+      - meow-dist:/output
+      # Montage du cache cargo/npm pour accélérer les builds futurs (optionnel mais recommandé)
+      # - cargo-cache:/root/.cargo
+      # - npm-cache:/app/node_modules
+    working_dir: /app
+    # On écrase la commande par défaut si besoin, mais celle du Dockerfile est bonne.
+    # L'utilisateur lancera : docker compose up --build meow-client-builder
+    networks:
+      - meow-net
+
+  # 3. Le Site Web de Distribution (Storefront)
+  meow-website:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      # Montage de la landing page
+      - ./website/index.html:/usr/share/nginx/html/index.html
+      # Montage du volume partagé contenant le .exe généré par le builder
+      # On le monte dans /downloads pour qu'il soit accessible via http://localhost/downloads/filename
+      # Nginx sert statiquement les fichiers. Il faut s'assurer que /usr/share/nginx/html/downloads pointe vers le volume.
+      # L'image nginx officielle sert /usr/share/nginx/html.
+      # Donc on monte le volume dans un sous-dossier 'downloads'.
+      - meow-dist:/usr/share/nginx/html/downloads
+    depends_on:
+      - meow-server # Juste pour l'ordre de démarrage, pas strict
+    networks:
+      - meow-net
+
+volumes:
+  meow-dist:
+    driver: local
+
+networks:
+  meow-net:
+    driver: bridge
