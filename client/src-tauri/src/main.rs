@@ -3,12 +3,12 @@
   windows_subsystem = "windows"
 )]
 
-use std::sync::{Arc, Mutex};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::State;
-use tokio::runtime::Runtime;
 use tokio::net::UdpSocket;
-
+use tokio::runtime::Runtime;
 
 struct AudioSession {
     running: Arc<AtomicBool>,
@@ -19,16 +19,17 @@ fn start_audio_session(server_addr: String, state: State<'_, AudioSession>) -> R
     if state.running.load(Ordering::Relaxed) {
         return Err("Session déjà active".into());
     }
-    
+
     state.running.store(true, Ordering::Relaxed);
     let running = state.running.clone();
 
+    // Lancer le thread audio/réseau
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
             match run_audio_loop(server_addr, running.clone()).await {
-                 Ok(_) => println!("Session terminée"),
-                 Err(e) => eprintln!("Erreur session: {:?}", e),
+                Ok(_) => println!("Session terminée proprement"),
+                Err(e) => eprintln!("Erreur session: {:?}", e),
             }
             running.store(false, Ordering::Relaxed);
         });
@@ -45,32 +46,67 @@ fn stop_audio_session(state: State<'_, AudioSession>) -> Result<(), String> {
 
 async fn run_audio_loop(server_addr: String, running: Arc<AtomicBool>) -> anyhow::Result<()> {
     println!("Connecting UDP to {}...", server_addr);
-    
-    // Bind local port (0 = random)
+
+    // 1. Réseau UDP
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     socket.connect(&server_addr).await?;
-    
-    println!("Connected! Sending dummy audio...");
+    let socket = Arc::new(socket);
 
-    // TODO: Connecter CPAL ici (Code de capture audio réel)
-    // Pour ce prototype dockerisé, on simule le flux audio pour être sûr que ça build sans libs sonores complexes
-    // Mais CPAL est dans les deps, donc prêt à être décommenté.
-    
-    let mut interval = tokio::time::interval(std::time::Duration::from_millis(20));
-    let mut seq = 0u8;
+    println!("Connected! Starting audio capture...");
 
+    // 2. Audio Capture (CPAL)
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| anyhow::anyhow!("No input device"))?;
+    
+    println!("Input device: {}", device.name()?);
+
+    let config: cpal::StreamConfig = device.default_input_config()?.into();
+
+    // Canal entre Thread Audio (Callback CPAL) et Thread Réseau (Tokio)
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+    let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
+
+    let stream = device.build_input_stream(
+        &config,
+        move |data: &[f32], _: &_| {
+            // Conversion f32 -> Bytes (PCM)
+            // On envoie des paquets bruts. 
+            // Optimisation possible : Opus Codec (mais complexe à ajouter sans statique)
+            let mut bytes = Vec::with_capacity(data.len() * 4);
+            for &sample in data {
+                bytes.extend_from_slice(&sample.to_le_bytes());
+            }
+            // Envoi des données au thread réseau
+            let _ = tx.send(bytes);
+        },
+        err_fn,
+        None, // Timeout
+    )?;
+
+    stream.play()?;
+
+    // Boucle d'envoi réseau
     while running.load(Ordering::Relaxed) {
-        interval.tick().await;
-        let payload = vec![seq; 100]; // 100 bytes audio data simulation
-        seq = seq.wrapping_add(1);
-
-        if let Err(e) = socket.send(&payload).await {
-            eprintln!("Send error: {:?}", e);
-            break;
+        // On récupère les chunks audio du channel
+        if let Some(data) = rx.recv().await {
+            // Fragmentation basique si trop gros pour UDP (MTU ~1400)
+            // Ici on suppose que CPAL envoie des petits buffers.
+            if data.len() < 1200 {
+                if let Err(e) = socket.send(&data).await {
+                    eprintln!("UDP Send Error: {:?}", e);
+                    break;
+                }
+            } else {
+                // Si trop gros, on drop ou on split (pour l'instant on drop pour simplifier)
+                // eprintln!("Packet too big: {}", data.len());
+            }
         }
     }
 
-    Ok(())
+    Ok(()) // Le stream audio est droppé ici et s'arrête
 }
 
 fn main() {
@@ -80,7 +116,10 @@ fn main() {
 
     tauri::Builder::default()
         .manage(session)
-        .invoke_handler(tauri::generate_handler![start_audio_session, stop_audio_session])
+        .invoke_handler(tauri::generate_handler![
+            start_audio_session,
+            stop_audio_session
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

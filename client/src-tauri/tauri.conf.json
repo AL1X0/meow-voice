@@ -20,7 +20,7 @@
         },
         "bundle": {
             "active": true,
-            "targets": "all",
+            "targets": "nsis",
             "identifier": "com.meow.voice",
             "icon": [
                 "icons/32x32.png",
