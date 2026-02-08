@@ -1,46 +1,40 @@
-name: Build Windows Client
+name: Release Windows
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest]
+    runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: setup node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: install frontend dependencies
+        working-directory: ./client
+        run: npm install
+
+      - name: Build and Create Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Install Frontend Dependencies
-        working-directory: ./client
-        run: |
-          rm package-lock.json
-          npm install
-
-      - name: Build Frontend (Debug)
-        working-directory: ./client
-        run: npm run build
-
-      - name: Build Tauri App
-        working-directory: ./client
-        run: npm run tauri build -- --verbose
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: meow-voice-setup
-          path: client/src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
+          projectPath: "./client"
+          tagName: app-v__VERSION__ 
+          releaseName: "Meow Voice v__VERSION__"
+          releaseBody: "See the assets to download this version and install."
+          releaseDraft: true
+          prerelease: false
